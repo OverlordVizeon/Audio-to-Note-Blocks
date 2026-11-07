@@ -4,8 +4,13 @@ import pynbs
 import stft
 
 # USER INPUTS
-AUDIO_PATH = r"D:\Music\Note Block Studio\Audio\The Chains of Reality.wav"
-FREQUENCY_PRECISION = 20
+# AUDIO_PATH is the path to the audio that will be converted to note blocks
+# FREQUENCY_PRECISION is the maximum number of frequencies (note blocks) that can be present in any tick
+# TICKS_PER_SECOND is the number of Minecraft ticks in a second. The highest ticks per second (tps) possible in Minecraft is 20
+# A4 is the frequency of the key A in the fourth octave and equals 440 in the 12-tone equal temperament tuning system. You can change this to experiment with different tuning systems, but A4 = 440 is generally considered the universal standard for 12-TET
+
+AUDIO_PATH = r"D:\Downloads\Courtesy of Vizeon.wav"
+FREQUENCY_PRECISION = 30
 TICKS_PER_SECOND = 60
 A4 = 440
 
@@ -24,8 +29,8 @@ def get_highest_amplitude(spectrogram):
     return highest_amplitude
 
 def filter_frequencies(spectrogram, highest_amplitude):
-    # Only get frequencies which are audible; 0.02 is arbitrary
-    amplitude_cutoff = highest_amplitude * 0.02
+    # Only get frequencies which are audible; 0.01 is arbitrary
+    amplitude_cutoff = highest_amplitude * 0.01
     filtered_spectrogram = []
     
     for spectrum in spectrogram:
@@ -57,7 +62,7 @@ def create_note(tick, key, velocity):
     
     if key >= 70:
         instrument = 7 # Bell
-        key_in_octave_range = key - 70 + A0_TO_FSHARP3
+        key_in_octave_range = key - 70 + A0_TO_FSHARP3 + 12
     elif key >= 58:
         instrument = 7 # Bell
         key_in_octave_range = key - 58 + A0_TO_FSHARP3
@@ -69,7 +74,7 @@ def create_note(tick, key, velocity):
         key_in_octave_range = key - 34 + A0_TO_FSHARP3
     elif key >= 22:
         instrument = 1 # Double Bass
-        key_in_octave_range = key - 22 + A0_TO_FSHARP3
+        key_in_octave_range = key - 22 + A0_TO_FSHARP3 + 12
     elif key >= 10:
         instrument = 1 # Double Bass
         key_in_octave_range = key - 10 + A0_TO_FSHARP3
@@ -97,7 +102,6 @@ if __name__ == "__main__":
     highest_amplitude = get_highest_amplitude(spectrogram)
     filtered_spectrogram = filter_frequencies(spectrogram, highest_amplitude)
 
-    # Convert to note block song
     song = pynbs.new_file(song_name = "Magic.nbs", tempo = TICKS_PER_SECOND)
 
     for spectrum_i, spectrum in enumerate(filtered_spectrogram):
@@ -124,4 +128,6 @@ if __name__ == "__main__":
             note.layer = note_i
             song.notes.append(note)
 
-    song.save("Magic.nbs")
+        print(f"{spectrum_i + 1} ticks processed!")
+
+    song.save("export.nbs")

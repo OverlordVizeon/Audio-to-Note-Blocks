@@ -1,11 +1,10 @@
 import numpy
 
-# EXPLANATION
-# f(x) can be any function
-# 'seconds' represents the amount of time processed by the DFT. When f(x) = sin(2 * pi * x), f(seconds) where seconds = 1 evaluates the entire period of the curve 'sample_rate' times, up to but not including (f(seconds))
-# sample_rate is the number of times a function is sampled per second, or the Hz. It must be greater than the nyquist frequency, or double the frequency of the highest-frequency sine wave in a function, at the absolute minimum in order for the DFT to give correct results.
-
 # USER INPUTS
+# f(x) can be any function
+# SECONDS represents the amount of time processed by the DFT. When f(x) = sin(2 * pi * x), f(seconds) where seconds = 1 evaluates the entire period of the curve 'sample_rate' times, up to but not including (f(seconds))
+# SAMPLE_RATE is the number of times a function is sampled per second, or the Hz. It must be greater than the nyquist frequency, or double the frequency of the highest-frequency sine wave in a function, at the absolute minimum in order for the DFT to give correct results.
+
 def f(x):
     return numpy.sin(50 * 2 * numpy.pi * x) + numpy.sin(120 * 2 * numpy.pi * x)
 
