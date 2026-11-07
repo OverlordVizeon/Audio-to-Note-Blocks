@@ -1,6 +1,6 @@
-import numpy
-
 # Vizeon's implementation of the Short-Time Fourier Transform algorithm.
+
+import numpy
 
 __all__ = ["stft"]
 
@@ -35,23 +35,27 @@ def stft(samples, sample_rate, window_size, hop_size):
     # Spectrogram consists of frames; each frame consists of frequencies, amplitudes, and phase shifts
     spectrogram = []
     
-    for frame_i in range(0, len(samples), hop_size):    
+    for frame_i in range(0, len(samples) - window_size + 1, hop_size):    
         spectrum = []
 
         frame_samples = samples[frame_i : frame_i + window_size]
 
+        windowed_samples = []
         for sample_i, sample in enumerate(frame_samples):
-            frame_samples[sample_i] *= 0.5 * (1 - numpy.cos(2 * numpy.pi * sample_i / (len(frame_samples) - 1)))
+            window_multiplier = 0.5 * (1 - numpy.cos(2 * numpy.pi * sample_i / (len(frame_samples) - 1)))
+            windowed_samples.append(sample * window_multiplier)
 
-        padded_samples, original_sample_count = pad_to_power_of_two(frame_samples)
+        padded_samples, original_sample_count = pad_to_power_of_two(windowed_samples)
         frequency_bins = fft(padded_samples)
 
-        for frequency_bin_i, frequency_bin in enumerate(frequency_bins):
+        nyquist_bin_i = len(frequency_bins) >> 1
+
+        for frequency_bin_i, frequency_bin in enumerate(frequency_bins[:nyquist_bin_i + 1]):
             frequency = frequency_bin_i * sample_rate / len(frequency_bins)
             
             amplitude = numpy.sqrt(numpy.real(frequency_bin) ** 2 + numpy.imag(frequency_bin) ** 2) / original_sample_count
 
-            if frequency_bin_i != 0 and frequency_bin_i != len(frequency_bins) >> 1:
+            if frequency_bin_i != 0 and frequency_bin_i != nyquist_bin_i:
                 amplitude *= 2
             
             phase_shift = numpy.atan2(numpy.imag(frequency_bin), numpy.real(frequency_bin))
