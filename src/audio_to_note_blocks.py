@@ -4,7 +4,7 @@ import pynbs
 import time
 
 import note_block_data
-import stft
+import stft_optimized
 import lufs_normalization
 
 # USER INPUTS
@@ -15,9 +15,9 @@ import lufs_normalization
 # SONG_NAME is the name of the file exported. Adding '.nbs' at the end is optional
 # STEREO determines whether the output is in stereo or mono
 
-AUDIO_PATH = r"D:\Downloads\Stereo Test.wav"
-MINIMUM_FREQUENCY_VOLUME = 0.1
-MAXIMUM_FREQUENCIES_PER_TICK = 40
+AUDIO_PATH = r"D:\Downloads\tn-shi - Synthesis.wav"
+MINIMUM_FREQUENCY_VOLUME = 0.05
+MAXIMUM_FREQUENCIES_PER_TICK = 25
 TICKS_PER_SECOND = 60
 SONG_NAME = "export.nbs"
 STEREO = True
@@ -43,7 +43,7 @@ def combine_stereo_spectrograms(left_spectrogram, right_spectrogram):
         for left_frequency_bin, right_frequency_bin in zip(left_spectrum, right_spectrum):
             left_amplitude, right_amplitude = left_frequency_bin["amplitude"], right_frequency_bin["amplitude"]
 
-            combined_amplitude = (left_amplitude + right_amplitude / 2)
+            combined_amplitude = (left_amplitude + right_amplitude) / 2
             panning = 0
             
             if combined_amplitude > 0:
@@ -61,45 +61,55 @@ def combine_stereo_spectrograms(left_spectrogram, right_spectrogram):
     return combined_spectrogram
 
 def apply_a_weighting(spectrogram):
-    for spectrum in spectrogram:
-        for frequency_bin in spectrum:
-            frequency = frequency_bin["frequency"]
+    if not spectrogram or not spectrogram[0]:
+        return spectrogram
+    
+    frequencies = []
 
-            decibel_weight = librosa.A_weighting(frequency)
-            linear_weight = 10 ** (decibel_weight / 20)
+    for frequency_bin in spectrogram[0]:
+        frequencies.append(frequency_bin["frequency"])
 
-            frequency_bin["amplitude"] *= linear_weight
-
-    return spectrogram
-
-def get_global_peak_amplitude(spectrogram):
-    peak_amplitude = 0
+    frequencies = numpy.array(frequencies)
+    
+    linear_weights = tuple(10 ** (librosa.A_weighting(frequencies) / 20))
     
     for spectrum in spectrogram:
-        local_peak_amplitude = get_local_peak_amplitude(spectrum)
-        if local_peak_amplitude > peak_amplitude:
-            peak_amplitude = local_peak_amplitude
+        for frequency_bin_i, frequency_bin in enumerate(spectrum):
+            frequency_bin["weighted_amplitude"] = frequency_bin["amplitude"] * linear_weights[frequency_bin_i]
+    
+    return spectrogram
 
-    return peak_amplitude
+def get_global_peak_amplitudes(spectrogram):
+    raw_peak_amplitude = 0
+    weighted_peak_amplitude = 0
+    
+    for spectrum in spectrogram:
+        for frequency_bin in spectrum:
+            if frequency_bin["amplitude"] > raw_peak_amplitude:
+                raw_peak_amplitude = frequency_bin["amplitude"]
+            if frequency_bin["weighted_amplitude"] > weighted_peak_amplitude:
+                weighted_peak_amplitude = frequency_bin["weighted_amplitude"]
 
-def get_local_peak_amplitude(spectrum):
+    return raw_peak_amplitude, weighted_peak_amplitude
+
+def get_local_weighted_peak_amplitude(spectrum):
     peak_amplitude = 0
 
     for frequency_bin in spectrum:
-        current_amplitude = frequency_bin["amplitude"]
+        current_amplitude = frequency_bin["weighted_amplitude"]
         if current_amplitude > peak_amplitude:
             peak_amplitude = current_amplitude
 
     return peak_amplitude
 
-def filter_frequencies(spectrum, local_peak_amplitude, global_peak_amplitude):
-    absolute_noise_floor = global_peak_amplitude * 0.001
-    amplitude_cutoff = max(local_peak_amplitude * MINIMUM_FREQUENCY_VOLUME, absolute_noise_floor)
+def filter_frequencies(spectrum, local_weighted_peak_amplitude, global_weighted_peak_amplitude):
+    absolute_noise_floor = global_weighted_peak_amplitude * 0.001
+    amplitude_cutoff = max(local_weighted_peak_amplitude * MINIMUM_FREQUENCY_VOLUME, absolute_noise_floor)
     
     filtered_frequency_bins = []
         
     for frequency_bin in spectrum:
-        if frequency_bin["amplitude"] > amplitude_cutoff:
+        if frequency_bin["weighted_amplitude"] > amplitude_cutoff:
             filtered_frequency_bins.append(frequency_bin)
 
     filtered_frequency_bins.sort(key = lambda frequency_bin: frequency_bin["amplitude"], reverse = True)
@@ -143,18 +153,18 @@ def create_note_block(frequency_bin, peak_amplitude, lufs_normalization_factors)
     )
 
 def build_song(spectrogram):
-    global_peak_amplitude = get_global_peak_amplitude(spectrogram)
+    global_raw_peak_amplitude, global_weighted_peak_amplitude = get_global_peak_amplitudes(spectrogram)
 
     lufs_normalization_factors = lufs_normalization.get_instrument_factors()
 
     for spectrum_i, spectrum in enumerate(spectrogram):
         notes_in_tick = {}
 
-        local_peak_amplitude = get_local_peak_amplitude(spectrum)
-        filtered_spectrum = filter_frequencies(spectrum, local_peak_amplitude, global_peak_amplitude)
+        local_weighted_peak_amplitude = get_local_weighted_peak_amplitude(spectrum)
+        filtered_spectrum = filter_frequencies(spectrum, local_weighted_peak_amplitude, global_weighted_peak_amplitude)
 
         for frequency_bin in filtered_spectrum:
-            note = create_note_block(frequency_bin, global_peak_amplitude, lufs_normalization_factors)
+            note = create_note_block(frequency_bin, global_raw_peak_amplitude, lufs_normalization_factors)
             if note == None:
                 continue
 
@@ -167,26 +177,25 @@ def build_song(spectrogram):
         sorted_notes = list(notes_in_tick.values())
         sorted_notes.sort(key = lambda note: note.layer)
 
-        for note in sorted_notes:
-            song.notes.append(note)
+        song.notes.extend(sorted_notes)
 
-def normalize_song_volume(notes):
+def normalize_song_volume(song):
     loudest_velocity = 0
-    for note in notes:
+    for note in song.notes:
         if note.velocity > loudest_velocity:
             loudest_velocity = note.velocity
 
-    global_boost_factor = 100 / loudest_velocity
+    if loudest_velocity > 0:
+        global_boost_factor = 100 / loudest_velocity
 
-    for note in song.notes:
-        note.velocity = int(round(note.velocity * global_boost_factor))
+        audible_notes = []
+        for note in song.notes:
+            note.velocity = int(round(note.velocity * global_boost_factor))
 
-    return notes
+            if note.velocity > 0:
+                audible_notes.append(note)
 
-def remove_silent_notes(notes):
-    for note in notes:
-        if note.velocity == 0:
-            notes.remove(note)
+        song.notes = audible_notes
 
 if __name__ == "__main__":
     total_start_time = time.perf_counter()
@@ -205,14 +214,14 @@ if __name__ == "__main__":
     else:
         left_samples, right_samples = samples, samples
     
-    left_spectrogram = stft.stft(
+    left_spectrogram = stft_optimized.stft(
         samples = left_samples,
         sample_rate = sample_rate,
         window_size = window_size,
         hop_size = hop_size
     )
 
-    right_spectrogram = stft.stft(
+    right_spectrogram = stft_optimized.stft(
         samples = right_samples,
         sample_rate = sample_rate,
         window_size = window_size,
@@ -235,11 +244,7 @@ if __name__ == "__main__":
     print("Done!")
 
     print("Normalizing song volume...")
-    normalize_song_volume(song.notes)
-    print("Done!")
-
-    print("Removing silent notes...")
-    remove_silent_notes(song.notes)
+    normalize_song_volume(song)
     print("Done!")
 
     print("Exporting song...")
