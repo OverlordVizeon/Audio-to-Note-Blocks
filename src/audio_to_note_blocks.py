@@ -13,12 +13,14 @@ import lufs_normalization
 # MAXIMUM_NOTES_PER_TICK is the maximum number of frequencies that will be processed in any tick. This is not the same as the maximum number of note blocks per tick. Set to -1 for unlimited
 # TICKS_PER_SECOND is the number of Minecraft ticks in a second. The highest ticks per second (tps) possible in Minecraft is 20
 # SONG_NAME is the name of the file exported. Adding '.nbs' at the end is optional
+# STEREO determines whether the output is in stereo or mono
 
-AUDIO_PATH = r"D:\Music\Note Block Studio\Audio\The Chains of Reality.wav"
+AUDIO_PATH = r"D:\Downloads\Stereo Test.wav"
 MINIMUM_FREQUENCY_VOLUME = 0.1
 MAXIMUM_FREQUENCIES_PER_TICK = 40
 TICKS_PER_SECOND = 60
 SONG_NAME = "export.nbs"
+STEREO = True
 
 # SCRIPT
 A4 = 440
@@ -31,6 +33,32 @@ def format_song_name(song_name):
         song_name += ".nbs"
 
     return song_name
+
+def combine_stereo_spectrograms(left_spectrogram, right_spectrogram):
+    combined_spectrogram = []
+
+    for left_spectrum, right_spectrum, in zip(left_spectrogram, right_spectrogram):
+        combined_spectrum = []
+
+        for left_frequency_bin, right_frequency_bin in zip(left_spectrum, right_spectrum):
+            left_amplitude, right_amplitude = left_frequency_bin["amplitude"], right_frequency_bin["amplitude"]
+
+            combined_amplitude = (left_amplitude + right_amplitude / 2)
+            panning = 0
+            
+            if combined_amplitude > 0:
+                panning_ratio = (right_amplitude - left_amplitude) / (right_amplitude + left_amplitude)
+                panning = int(round(panning_ratio * 100))
+
+            combined_spectrum.append({
+                "frequency": left_frequency_bin["frequency"],
+                "amplitude": combined_amplitude,
+                "panning": panning
+            })
+
+        combined_spectrogram.append(combined_spectrum)
+
+    return combined_spectrogram
 
 def apply_a_weighting(spectrogram):
     for spectrum in spectrogram:
@@ -110,7 +138,8 @@ def create_note_block(frequency_bin, peak_amplitude, lufs_normalization_factors)
         layer = 81 - piano_key,
         instrument = instrument,
         key = key_in_note_block_range,
-        velocity = velocity
+        velocity = velocity,
+        panning = frequency_bin["panning"]
     )
 
 def build_song(spectrogram):
@@ -165,18 +194,32 @@ if __name__ == "__main__":
     formatted_song_name = format_song_name(SONG_NAME)
 
     print(f"Loading {formatted_song_name}...")
-    samples, sample_rate = librosa.load(AUDIO_PATH, sr=None)
+    samples, sample_rate = librosa.load(AUDIO_PATH, sr = None, mono = not STEREO)
     window_size = 4096
     hop_size = sample_rate // TICKS_PER_SECOND
     print("Done!")
 
     print("Building spectrogram...")
-    spectrogram = stft.stft(
-        samples = samples,
+    if STEREO and samples.ndim == 2:
+        left_samples, right_samples = samples[0], samples[1]
+    else:
+        left_samples, right_samples = samples, samples
+    
+    left_spectrogram = stft.stft(
+        samples = left_samples,
         sample_rate = sample_rate,
         window_size = window_size,
         hop_size = hop_size
     )
+
+    right_spectrogram = stft.stft(
+        samples = right_samples,
+        sample_rate = sample_rate,
+        window_size = window_size,
+        hop_size = hop_size
+    )
+
+    spectrogram = combine_stereo_spectrograms(left_spectrogram, right_spectrogram)
     print("Done!")
 
     print("Applying A-weighting...")
@@ -206,4 +249,4 @@ if __name__ == "__main__":
     total_end_time = time.perf_counter()
 
     print()
-    print(f"Song saved as {formatted_song_name}! (Took {total_end_time - total_start_time:.3f} seconds)")
+    print(f"Song saved as {formatted_song_name}! (took {total_end_time - total_start_time:.3f} seconds)")
