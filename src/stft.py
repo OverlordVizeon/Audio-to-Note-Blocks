@@ -64,7 +64,6 @@ def stft(samples, sample_rate, window_size, hop_size):
                 "phase_shift": phase_shift
             })
 
-        print(f"STFT #{frame_i // hop_size + 1} finished!")
         spectrogram.append(spectrum)
 
     return spectrogram
