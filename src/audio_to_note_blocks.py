@@ -12,8 +12,8 @@ import lufs_normalization
 # TICKS_PER_SECOND is the number of Minecraft ticks in a second. The highest ticks per second (tps) possible in Minecraft is 20
 # A4 is the frequency of the key A in the fourth octave and equals 440 in the 12-tone equal temperament tuning system. You can change this to experiment with different tuning systems, but A4 = 440 is generally considered the universal standard for 12-TET
 
-AUDIO_PATH = r"D:\Downloads\Vizeon.wav"
-FREQUENCY_PRECISION = 100
+AUDIO_PATH = r"D:\Downloads\tn-shi - Synthesis.wav"
+FREQUENCY_PRECISION = 50
 TICKS_PER_SECOND = 60
 A4 = 440
 
@@ -33,8 +33,8 @@ def get_peak_amplitude(spectrogram):
     return peak_amplitude
 
 def filter_frequencies(spectrogram, peak_amplitude):
-    # Only get frequencies which are audible; 0.01 is arbitrary
-    amplitude_cutoff = peak_amplitude * 0.01
+    # Only get frequencies which are audible; 0.03 is arbitrary, but appears to be a good balance of precision and size
+    amplitude_cutoff = peak_amplitude * 0.03
     filtered_spectrogram = []
     
     for spectrum in spectrogram:
@@ -50,36 +50,50 @@ def filter_frequencies(spectrogram, peak_amplitude):
 
     return filtered_spectrogram
 
-def get_piano_key(frequency):
+def create_note_block(frequency_bin, peak_amplitude, lufs_normalization_factors):
+    piano_key, instrument, key_in_note_block_range, velocity = None, None, None, None
+    
+    frequency = frequency_bin["frequency"]
     if frequency <= 0:
         return None
-        
+
     piano_key = int(round(12 * numpy.log2(frequency / A4) + A0_TO_A4))
-    
     if piano_key <= 9 or piano_key >= 82:
         return None
-        
-    return piano_key
-
-def create_note(tick, key, velocity, note_block_spectrum, volume_normalization_factors):
-    instrument, key_in_octave_range, velocity = None, None, velocity
+    
+    note_block_spectrum = note_block_data.get_note_block_spectrum()
+    key_in_octave_range = None
 
     for octave in note_block_spectrum.values():
-        if key <= octave["octave_start"] + OCTAVE_SIZE - 1:
+        if piano_key < octave["start"] + OCTAVE_SIZE:
             instrument = octave["instrument"]
-            key_in_octave_range = key - octave["octave_start"] + octave["key_offset"]
+
+            key_in_octave_range = piano_key - octave["start"] + octave["key_offset"]
+            key_in_note_block_range = key_in_octave_range + A0_TO_FSHARP3
             break
 
-    key_in_note_block_range = key_in_octave_range + A0_TO_FSHARP3
-    volume_normalization_factor = volume_normalization_factors[instrument][key_in_octave_range]
+    velocity = frequency_bin["amplitude"] * 100 / peak_amplitude * lufs_normalization_factors[instrument][key_in_octave_range]
 
     return pynbs.Note(
-        tick = tick,
-        layer = None,
+        tick = None,
+        layer = 81 - piano_key,
         instrument = instrument,
         key = key_in_note_block_range,
-        velocity = int(round(velocity * volume_normalization_factor))
+        velocity = velocity
     )
+
+def normalize_song_volume(notes):
+    loudest_velocity = 0
+    for note in notes:
+        if note.velocity > loudest_velocity:
+            loudest_velocity = note.velocity
+
+    global_boost_factor = 100 / loudest_velocity
+
+    for note in song.notes:
+        note.velocity = int(round(note.velocity * global_boost_factor))
+
+    return notes
 
 if __name__ == "__main__":
     samples, sample_rate = librosa.load(AUDIO_PATH, sr=None)
@@ -96,7 +110,7 @@ if __name__ == "__main__":
     song = pynbs.new_file(song_name = "Magic.nbs", tempo = TICKS_PER_SECOND)
 
     note_block_spectrum = note_block_data.get_note_block_spectrum()
-    volume_normalization_factors = lufs_normalization.get_instrument_factors()
+    lufs_normalization_factors = lufs_normalization.get_instrument_factors()
 
     peak_amplitude = get_peak_amplitude(spectrogram)
     filtered_spectrogram = filter_frequencies(spectrogram, peak_amplitude)
@@ -105,33 +119,22 @@ if __name__ == "__main__":
         notes_in_tick = {}
 
         for frequency_bin_i, frequency_bin in enumerate(spectrum):
-            piano_key = get_piano_key(frequency_bin["frequency"])
-
-            if piano_key is None:
+            note = create_note_block(frequency_bin, peak_amplitude, lufs_normalization_factors)
+            if note == None:
                 continue
-            
-            velocity = round(frequency_bin["amplitude"] * 100 / peak_amplitude)
-            
-            note_to_add = create_note(
-                tick = spectrum_i,
-                key = piano_key,
-                velocity = velocity,
-                note_block_spectrum = note_block_spectrum,
-                volume_normalization_factors = volume_normalization_factors
-            )
 
-            note_identifier = (note_to_add.instrument, note_to_add.key)
+            note.tick = spectrum_i
 
-            if note_identifier not in notes_in_tick or velocity > notes_in_tick[note_identifier].velocity:
-                notes_in_tick[note_identifier] = note_to_add
+            note_identifier = (note.instrument, note.key)
+            if note_identifier not in notes_in_tick or note.velocity > notes_in_tick[note_identifier].velocity:
+                notes_in_tick[note_identifier] = note
 
-        sorted_notes = list(notes_in_tick.values())
-        sorted_notes.sort(key = lambda note: note.velocity, reverse = True)
-
-        for note_i, note in enumerate(sorted_notes):
-            note.layer = note_i
+        for note in notes_in_tick.values():
             song.notes.append(note)
 
-        print(f"{spectrum_i + 1} ticks built!")
+    song.notes = normalize_song_volume(song.notes)
 
+    print("Exporting song...")
     song.save("export.nbs")
+
+    print("Export complete!")
