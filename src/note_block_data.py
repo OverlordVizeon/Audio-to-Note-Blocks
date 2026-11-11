@@ -25,12 +25,12 @@ instrument_files = {
 }
 
 note_block_spectrum = {
-    "F#1-F2": {"start": 10, "instrument": 12, "key_offset": 0}, # Didgeridoo
-    "F#2-F3": {"start": 22, "instrument": 1, "key_offset": 12}, # Double Bass
-    "F#3-F4": {"start": 34, "instrument": 0, "key_offset": 0}, # Harp
-    "F#4-F5": {"start": 46, "instrument": 6, "key_offset": 0}, # Flute
-    "F#5-F6": {"start": 58, "instrument": 6, "key_offset": 12}, # Flute
-    "F#6-F7": {"start": 70, "instrument": 7, "key_offset": 12} # Bell
+    0: {"start": 10, "end": 21, "instrument": 12, "key_offset": 0}, # Didgeridoo
+    1: {"start": 22, "end": 33, "instrument": 1, "key_offset": 12}, # Double Bass
+    2: {"start": 34, "end": 45, "instrument": 0, "key_offset": 0}, # Harp
+    3: {"start": 46, "end": 57, "instrument": 6, "key_offset": 0}, # Flute
+    4: {"start": 58, "end": 69, "instrument": 6, "key_offset": 12}, # Flute
+    5: {"start": 70, "end": 81, "instrument": 7, "key_offset": 12} # Bell
 }
 
 def get_instrument_paths():

@@ -9,15 +9,13 @@ import lufs_normalization
 # USER INPUTS
 # AUDIO_PATH is the path to the audio that will be converted to note blocks
 # MINIMUM_FREQUENCY_VOLUME is the minimum volume a frequency must be for it to be turned into a note block relative to the loudest frequency in its tick. This is intended to ensure that only humanly-audible frequencies are played, optimizing song playback and exported file size at a diminishing cost to accuracy
-# MAXIMUM_NOTES_PER_TICK is the maximum number of frequencies that will be processed in any tick. This is not the same as the maximum number of note blocks per tick. Set to -1 for unlimited
 # TICKS_PER_SECOND is the number of Minecraft ticks in a second. The highest ticks per second (tps) possible in Minecraft is 20
 # SONG_NAME is the name of the file exported. Adding '.nbs' at the end is optional
 # STEREO determines whether the output is in stereo or mono
 
-AUDIO_PATH = r"D:\Downloads\tn-shi - Synthesis.wav"
-MINIMUM_FREQUENCY_VOLUME = 0
-MAXIMUM_FREQUENCIES_PER_TICK = 20
-TICKS_PER_SECOND = 60
+AUDIO_PATH = r"D:\Downloads\Mariah Carey - All I Want For Christmas Is You.wav"
+MAXIMUM_FREQUENCIES_PER_TICK = 40 # Currently unused
+TICKS_PER_SECOND = 20
 SONG_NAME = "export.nbs"
 STEREO = True
 
@@ -38,10 +36,11 @@ def fft(samples, sample_rate, window_size):
     hann_window = numpy.hanning(window_size)
     windowed_frames = samples * hann_window
 
-    frequency_bins = numpy.fft.rfft(windowed_frames)
+    fft_window_size = window_size * 4
+    frequency_bins = numpy.fft.rfft(windowed_frames, n = fft_window_size)
 
-    frequencies = numpy.fft.rfftfreq(window_size, d = 1.0 / sample_rate)
-    amplitudes = numpy.abs(frequency_bins) * (2.0 / numpy.sum(hann_window))
+    frequencies = numpy.fft.rfftfreq(fft_window_size, d = 1 / sample_rate)
+    amplitudes = numpy.abs(frequency_bins) * (2 / numpy.sum(hann_window))
 
     return frequencies, amplitudes
 
@@ -73,25 +72,28 @@ def apply_a_weighting(frequencies, amplitudes):
     return weighted_amplitudes
 
 def filter_frequencies(frequencies, amplitudes, weighted_amplitudes, pannings):
+    if len(weighted_amplitudes) < 3:
+        return frequencies, amplitudes, pannings
+    
+    minimum_frequency = A4 * 2 ** ((10 - A0_TO_A4 - 0.5) / 12)
+    maximum_frequency = A4 * 2 ** ((81 - A0_TO_A4 + 0.5) / 12)
+    playable = (frequencies >= minimum_frequency) & (frequencies <= maximum_frequency)
+
+    frequencies = frequencies[playable]
+    amplitudes = amplitudes[playable]
+    weighted_amplitudes = weighted_amplitudes[playable]
+    pannings = pannings[playable]
+
     if len(weighted_amplitudes) == 0:
         return frequencies, amplitudes, pannings
 
-    peak_amplitude = numpy.max(weighted_amplitudes)
-    amplitude_cutoff = max(peak_amplitude * MINIMUM_FREQUENCY_VOLUME, ABSOLUTE_NOISE_FLOOR)
+    peaks = numpy.zeros(len(amplitudes), dtype = bool)
+    peaks[1:-1] = (amplitudes[1:-1] > amplitudes[:-2]) & (amplitudes[1:-1] >= amplitudes[2:])
 
-    audible = weighted_amplitudes > amplitude_cutoff
-    
-    frequencies = frequencies[audible]
-    amplitudes = amplitudes[audible]
-    weighted_amplitudes = weighted_amplitudes[audible]
-    pannings = pannings[audible]
-
-    if MAXIMUM_FREQUENCIES_PER_TICK != -1 and len(weighted_amplitudes) > MAXIMUM_FREQUENCIES_PER_TICK:
-        loudest_indices = numpy.argsort(weighted_amplitudes)[::-1][:MAXIMUM_FREQUENCIES_PER_TICK]
-        
-        frequencies = frequencies[loudest_indices]
-        amplitudes = amplitudes[loudest_indices]
-        pannings = pannings[loudest_indices]
+    frequencies = frequencies[peaks]
+    amplitudes = amplitudes[peaks]
+    weighted_amplitudes = weighted_amplitudes[peaks]
+    pannings = pannings[peaks]
 
     return frequencies, amplitudes, pannings
 
@@ -114,7 +116,7 @@ def create_note_block(tick, frequency, amplitude, panning, note_block_spectrum, 
 
     velocity = amplitude * lufs_normalization_factors[instrument][key_in_octave_range]
     
-    piano_key_offset = note_block_spectrum["F#1-F2"]["start"] + note_block_spectrum["F#6-F7"]["start"] + 1
+    piano_key_offset = note_block_spectrum[0]["start"] + note_block_spectrum[5]["start"] + 1
     return pynbs.Note(
         tick = tick,
         layer = piano_key_offset - piano_key,
@@ -131,7 +133,7 @@ def build_song(tick_i, frequencies, amplitudes, pannings, note_block_spectrum, l
         note = create_note_block(tick_i, frequency, amplitude, panning, note_block_spectrum, lufs_normalization_factors)
         if note == None:
             continue 
-
+        
         note_identifier = (note.instrument, note.key)
         if note_identifier not in notes_in_tick or note.velocity > notes_in_tick[note_identifier].velocity:
             notes_in_tick[note_identifier] = note
@@ -194,7 +196,7 @@ if __name__ == "__main__":
     print("Done!")
 
     print("Exporting song...")
-    song.save(format_song_name(SONG_NAME))
+    song.save(formatted_song_name)
     print("Done!")
 
     total_end_time = time.perf_counter()

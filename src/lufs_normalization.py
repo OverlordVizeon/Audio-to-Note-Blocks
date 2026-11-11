@@ -9,7 +9,7 @@ __all__ = ["get_instrument_factors"]
 def get_perceived_loudness(samples, sample_rate):
     minimum_length = int(numpy.ceil(0.4 * sample_rate))
     if len(samples) < minimum_length:
-        samples = numpy.pad(samples, (0, minimum_length - len(samples)))
+        samples = numpy.pad(samples, (0, minimum_length - len(samples)), mode = "wrap")
 
     meter = pyloudnorm.Meter(sample_rate)
     return meter.integrated_loudness(samples)
@@ -28,7 +28,7 @@ def get_instrument_factors():
             instrument_lufs[instrument_id] = {}
 
         for semitone in range(key_offset, key_offset + 12):
-            pitch_shift = 2 ** (semitone / 12)
+            pitch_shift = 2 ** ((semitone - 12) / 12)
             target_sample_rate = sample_rate / pitch_shift
             
             shifted_instrument_samples = librosa.resample(
