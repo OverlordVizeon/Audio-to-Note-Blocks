@@ -4,7 +4,6 @@ import pynbs
 import time
 
 import note_block_data
-import stft_optimized
 import lufs_normalization
 
 # USER INPUTS
@@ -16,8 +15,8 @@ import lufs_normalization
 # STEREO determines whether the output is in stereo or mono
 
 AUDIO_PATH = r"D:\Downloads\tn-shi - Synthesis.wav"
-MINIMUM_FREQUENCY_VOLUME = 0.05
-MAXIMUM_FREQUENCIES_PER_TICK = 25
+MINIMUM_FREQUENCY_VOLUME = 0
+MAXIMUM_FREQUENCIES_PER_TICK = 20
 TICKS_PER_SECOND = 60
 SONG_NAME = "export.nbs"
 STEREO = True
@@ -26,6 +25,7 @@ STEREO = True
 A4 = 440
 A0_TO_A4 = 49
 A0_TO_FSHARP3 = 33
+ABSOLUTE_NOISE_FLOOR = 0.001
 OCTAVE_SIZE = 12
 
 def format_song_name(song_name):
@@ -34,105 +34,76 @@ def format_song_name(song_name):
 
     return song_name
 
-def combine_stereo_spectrograms(left_spectrogram, right_spectrogram):
-    combined_spectrogram = []
+def fft(samples, sample_rate, window_size):
+    hann_window = numpy.hanning(window_size)
+    windowed_frames = samples * hann_window
 
-    for left_spectrum, right_spectrum, in zip(left_spectrogram, right_spectrogram):
-        combined_spectrum = []
+    frequency_bins = numpy.fft.rfft(windowed_frames)
 
-        for left_frequency_bin, right_frequency_bin in zip(left_spectrum, right_spectrum):
-            left_amplitude, right_amplitude = left_frequency_bin["amplitude"], right_frequency_bin["amplitude"]
+    frequencies = numpy.fft.rfftfreq(window_size, d = 1.0 / sample_rate)
+    amplitudes = numpy.abs(frequency_bins) * (2.0 / numpy.sum(hann_window))
 
-            combined_amplitude = (left_amplitude + right_amplitude) / 2
-            panning = 0
-            
-            if combined_amplitude > 0:
-                panning_ratio = (right_amplitude - left_amplitude) / (right_amplitude + left_amplitude)
-                panning = int(round(panning_ratio * 100))
+    return frequencies, amplitudes
 
-            combined_spectrum.append({
-                "frequency": left_frequency_bin["frequency"],
-                "amplitude": combined_amplitude,
-                "panning": panning
-            })
+def get_spectrum(samples, sample_rate, window_size, is_stereo):
+    audio_channels = samples.ndim
 
-        combined_spectrogram.append(combined_spectrum)
-
-    return combined_spectrogram
-
-def apply_a_weighting(spectrogram):
-    if not spectrogram or not spectrogram[0]:
-        return spectrogram
+    if is_stereo and audio_channels == 2:
+        left_samples, right_samples = samples[0], samples[1]
+    else:
+        left_samples, right_samples = samples, samples
     
-    frequencies = []
+    frequencies, left_amplitudes = fft(samples = left_samples, sample_rate = sample_rate, window_size = window_size)
+    _, right_amplitudes = fft(samples = right_samples, sample_rate = sample_rate, window_size = window_size)
 
-    for frequency_bin in spectrogram[0]:
-        frequencies.append(frequency_bin["frequency"])
+    return frequencies, left_amplitudes, right_amplitudes
 
-    frequencies = numpy.array(frequencies)
+def build_stereo_sound(left_amplitudes, right_amplitudes):
+    combined_amplitudes = (left_amplitudes + right_amplitudes) / 2
+
+    epsilon = 1e-10
+    pannings = numpy.round((right_amplitudes - left_amplitudes) / (right_amplitudes + left_amplitudes + epsilon) * 100).astype(int)
     
-    linear_weights = tuple(10 ** (librosa.A_weighting(frequencies) / 20))
+    return combined_amplitudes, pannings
+
+def apply_a_weighting(frequencies, amplitudes):
+    linear_weights = numpy.array(10 ** (librosa.A_weighting(frequencies) / 20))
+    weighted_amplitudes = amplitudes * linear_weights
+
+    return weighted_amplitudes
+
+def filter_frequencies(frequencies, amplitudes, weighted_amplitudes, pannings):
+    if len(weighted_amplitudes) == 0:
+        return frequencies, amplitudes, pannings
+
+    peak_amplitude = numpy.max(weighted_amplitudes)
+    amplitude_cutoff = max(peak_amplitude * MINIMUM_FREQUENCY_VOLUME, ABSOLUTE_NOISE_FLOOR)
+
+    audible = weighted_amplitudes > amplitude_cutoff
     
-    for spectrum in spectrogram:
-        for frequency_bin_i, frequency_bin in enumerate(spectrum):
-            frequency_bin["weighted_amplitude"] = frequency_bin["amplitude"] * linear_weights[frequency_bin_i]
-    
-    return spectrogram
+    frequencies = frequencies[audible]
+    amplitudes = amplitudes[audible]
+    weighted_amplitudes = weighted_amplitudes[audible]
+    pannings = pannings[audible]
 
-def get_global_peak_amplitudes(spectrogram):
-    raw_peak_amplitude = 0
-    weighted_peak_amplitude = 0
-    
-    for spectrum in spectrogram:
-        for frequency_bin in spectrum:
-            if frequency_bin["amplitude"] > raw_peak_amplitude:
-                raw_peak_amplitude = frequency_bin["amplitude"]
-            if frequency_bin["weighted_amplitude"] > weighted_peak_amplitude:
-                weighted_peak_amplitude = frequency_bin["weighted_amplitude"]
-
-    return raw_peak_amplitude, weighted_peak_amplitude
-
-def get_local_weighted_peak_amplitude(spectrum):
-    peak_amplitude = 0
-
-    for frequency_bin in spectrum:
-        current_amplitude = frequency_bin["weighted_amplitude"]
-        if current_amplitude > peak_amplitude:
-            peak_amplitude = current_amplitude
-
-    return peak_amplitude
-
-def filter_frequencies(spectrum, local_weighted_peak_amplitude, global_weighted_peak_amplitude):
-    absolute_noise_floor = global_weighted_peak_amplitude * 0.001
-    amplitude_cutoff = max(local_weighted_peak_amplitude * MINIMUM_FREQUENCY_VOLUME, absolute_noise_floor)
-    
-    filtered_frequency_bins = []
+    if MAXIMUM_FREQUENCIES_PER_TICK != -1 and len(weighted_amplitudes) > MAXIMUM_FREQUENCIES_PER_TICK:
+        loudest_indices = numpy.argsort(weighted_amplitudes)[::-1][:MAXIMUM_FREQUENCIES_PER_TICK]
         
-    for frequency_bin in spectrum:
-        if frequency_bin["weighted_amplitude"] > amplitude_cutoff:
-            filtered_frequency_bins.append(frequency_bin)
+        frequencies = frequencies[loudest_indices]
+        amplitudes = amplitudes[loudest_indices]
+        pannings = pannings[loudest_indices]
 
-    filtered_frequency_bins.sort(key = lambda frequency_bin: frequency_bin["amplitude"], reverse = True)
-    
-    if MAXIMUM_FREQUENCIES_PER_TICK != -1:
-        filtered_frequency_bins = filtered_frequency_bins[:MAXIMUM_FREQUENCIES_PER_TICK]
+    return frequencies, amplitudes, pannings
 
-    return filtered_frequency_bins
-
-def create_note_block(frequency_bin, peak_amplitude, lufs_normalization_factors):
-    piano_key, instrument, key_in_note_block_range, velocity = None, None, None, None
-    
-    frequency = frequency_bin["frequency"]
+def create_note_block(tick, frequency, amplitude, panning, note_block_spectrum, lufs_normalization_factors):
     if frequency <= 0:
         return None
-
+    
     piano_key = int(round(12 * numpy.log2(frequency / A4) + A0_TO_A4))
     if piano_key <= 9 or piano_key >= 82:
         return None
-    
-    note_block_spectrum = note_block_data.get_note_block_spectrum()
-    key_in_octave_range = None
 
+    instrument, key_in_note_block_range = None, None
     for octave in note_block_spectrum.values():
         if piano_key < octave["start"] + OCTAVE_SIZE:
             instrument = octave["instrument"]
@@ -141,43 +112,34 @@ def create_note_block(frequency_bin, peak_amplitude, lufs_normalization_factors)
             key_in_note_block_range = key_in_octave_range + A0_TO_FSHARP3
             break
 
-    velocity = frequency_bin["amplitude"] * 100 / peak_amplitude * lufs_normalization_factors[instrument][key_in_octave_range]
-
+    velocity = amplitude * lufs_normalization_factors[instrument][key_in_octave_range]
+    
+    piano_key_offset = note_block_spectrum["F#1-F2"]["start"] + note_block_spectrum["F#6-F7"]["start"] + 1
     return pynbs.Note(
-        tick = None,
-        layer = 81 - piano_key,
+        tick = tick,
+        layer = piano_key_offset - piano_key,
         instrument = instrument,
         key = key_in_note_block_range,
         velocity = velocity,
-        panning = frequency_bin["panning"]
+        panning = int(panning)
     )
 
-def build_song(spectrogram):
-    global_raw_peak_amplitude, global_weighted_peak_amplitude = get_global_peak_amplitudes(spectrogram)
+def build_song(tick_i, frequencies, amplitudes, pannings, note_block_spectrum, lufs_normalization_factors):
+    notes_in_tick = {}
+    
+    for frequency, amplitude, panning in zip(frequencies, amplitudes, pannings):
+        note = create_note_block(tick_i, frequency, amplitude, panning, note_block_spectrum, lufs_normalization_factors)
+        if note == None:
+            continue 
 
-    lufs_normalization_factors = lufs_normalization.get_instrument_factors()
+        note_identifier = (note.instrument, note.key)
+        if note_identifier not in notes_in_tick or note.velocity > notes_in_tick[note_identifier].velocity:
+            notes_in_tick[note_identifier] = note
 
-    for spectrum_i, spectrum in enumerate(spectrogram):
-        notes_in_tick = {}
+    sorted_notes = list(notes_in_tick.values())
+    sorted_notes.sort(key = lambda note: note.layer)
 
-        local_weighted_peak_amplitude = get_local_weighted_peak_amplitude(spectrum)
-        filtered_spectrum = filter_frequencies(spectrum, local_weighted_peak_amplitude, global_weighted_peak_amplitude)
-
-        for frequency_bin in filtered_spectrum:
-            note = create_note_block(frequency_bin, global_raw_peak_amplitude, lufs_normalization_factors)
-            if note == None:
-                continue
-
-            note.tick = spectrum_i
-
-            note_identifier = (note.instrument, note.key)
-            if note_identifier not in notes_in_tick or note.velocity > notes_in_tick[note_identifier].velocity:
-                notes_in_tick[note_identifier] = note
-
-        sorted_notes = list(notes_in_tick.values())
-        sorted_notes.sort(key = lambda note: note.layer)
-
-        song.notes.extend(sorted_notes)
+    song.notes.extend(sorted_notes)
 
 def normalize_song_volume(song):
     loudest_velocity = 0
@@ -208,39 +170,23 @@ if __name__ == "__main__":
     hop_size = sample_rate // TICKS_PER_SECOND
     print("Done!")
 
-    print("Building spectrogram...")
-    if STEREO and samples.ndim == 2:
-        left_samples, right_samples = samples[0], samples[1]
-    else:
-        left_samples, right_samples = samples, samples
-    
-    left_spectrogram = stft_optimized.stft(
-        samples = left_samples,
-        sample_rate = sample_rate,
-        window_size = window_size,
-        hop_size = hop_size
-    )
-
-    right_spectrogram = stft_optimized.stft(
-        samples = right_samples,
-        sample_rate = sample_rate,
-        window_size = window_size,
-        hop_size = hop_size
-    )
-
-    spectrogram = combine_stereo_spectrograms(left_spectrogram, right_spectrogram)
-    print("Done!")
-
-    print("Applying A-weighting...")
-    spectrogram = apply_a_weighting(spectrogram)
-    print("Done!")
-
     print("Initializing new .nbs file...")
     song = pynbs.new_file(tempo = TICKS_PER_SECOND)
+    note_block_spectrum = note_block_data.get_note_block_spectrum()
+    lufs_normalization_factors = lufs_normalization.get_instrument_factors()
     print("Done!")
 
     print("Building song...")
-    build_song(spectrogram)
+    total_samples = samples.shape[-1]
+    for tick_i, sample_i in enumerate(range(0, total_samples - window_size + 1, hop_size)):
+        tick_samples = samples[..., sample_i : sample_i + window_size]
+
+        frequencies, left_amplitudes, right_amplitudes = get_spectrum(tick_samples, sample_rate, window_size, STEREO)
+        amplitudes, pannings = build_stereo_sound(left_amplitudes, right_amplitudes)
+        weighted_amplitudes = apply_a_weighting(frequencies, amplitudes)
+        frequencies, amplitudes, pannings = filter_frequencies(frequencies, amplitudes, weighted_amplitudes, pannings)
+        
+        build_song(tick_i, frequencies, amplitudes, pannings, note_block_spectrum, lufs_normalization_factors)
     print("Done!")
 
     print("Normalizing song volume...")

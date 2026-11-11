@@ -1,7 +1,5 @@
 import numpy
 
-__all__ = ["stft"]
-
 # SCRIPT
 def pad_to_power_of_two(samples):
     sample_count = len(samples)
